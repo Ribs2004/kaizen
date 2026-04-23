@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState } from "react";
+import { useFormStatus } from "react-dom";
 import { ACTIVITIES, CATEGORY_LABELS, type Activity, type ActivityCategory } from "@/lib/activities";
 import { basePointsForLog, streakTierFor } from "@/lib/scoring";
 import { submitCheckIn } from "./actions";
@@ -57,7 +58,6 @@ export function CheckInForm({
 }) {
   const [state, setState] = useState(() => initialState(existingLogs));
   const [note, setNote] = useState(existingNote);
-  const [isPending, startTransition] = useTransition();
 
   // Streak that today's check-in will produce.
   const projectedStreak = isEditingToday ? currentStreak : currentStreak + 1;
@@ -119,17 +119,8 @@ export function CheckInForm({
     });
   }
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const data = new FormData(form);
-    startTransition(() => {
-      void submitCheckIn(data);
-    });
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="fade-up flex flex-col gap-5 pb-4">
+    <form action={submitCheckIn} className="fade-up flex flex-col gap-5 pb-4">
       <input type="hidden" name="local_date" value={localDate} />
 
       <header className="flex items-start justify-between gap-4">
@@ -219,16 +210,32 @@ export function CheckInForm({
               {selectedCount} {selectedCount === 1 ? "activity" : "activities"}
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={selectedCount === 0 || isPending}
-            className="rounded-full bg-gradient-to-r from-[#7c5cff] via-[#a855f7] to-[#ff7a45] px-6 py-3 text-sm font-semibold text-white shadow-[0_10px_40px_-10px_rgba(124,92,255,0.6)] transition enabled:hover:brightness-110 disabled:opacity-40"
-          >
-            {isPending ? "Saving…" : isEditingToday ? "Update check-in" : "Complete check-in"}
-          </button>
+          <SubmitButton
+            disabledWhenIdle={selectedCount === 0}
+            idleLabel={isEditingToday ? "Update check-in" : "Complete check-in"}
+          />
         </div>
       </div>
     </form>
+  );
+}
+
+function SubmitButton({
+  disabledWhenIdle,
+  idleLabel,
+}: {
+  disabledWhenIdle: boolean;
+  idleLabel: string;
+}) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={disabledWhenIdle || pending}
+      className="rounded-full bg-gradient-to-r from-[#7c5cff] via-[#a855f7] to-[#ff7a45] px-6 py-3 text-sm font-semibold text-white shadow-[0_10px_40px_-10px_rgba(124,92,255,0.6)] transition enabled:hover:brightness-110 disabled:opacity-40"
+    >
+      {pending ? "Saving…" : idleLabel}
+    </button>
   );
 }
 
