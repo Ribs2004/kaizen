@@ -46,6 +46,7 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/history") ||
     pathname.startsWith("/stats") ||
     pathname.startsWith("/groups") ||
+    pathname.startsWith("/join") ||
     pathname.startsWith("/profile");
 
   if (!user && isProtectedRoute) {

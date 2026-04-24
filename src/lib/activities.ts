@@ -148,7 +148,9 @@ export const ACTIVITIES: Activity[] = [
     basePoints: 5,
     durationBonusPer10Min: 0,
     kind: "habit",
-    details: [],
+    details: [
+      { key: "pages", label: "Pages", kind: "number", unit: "pages", placeholder: "e.g. 20" },
+    ],
   },
   {
     id: "water",

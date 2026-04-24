@@ -169,6 +169,27 @@ create policy "users can leave groups (delete self)"
   on public.group_members for delete
   to authenticated using (auth.uid() = user_id);
 
+-- Helper: is the current user the owner of a given group?
+-- SECURITY DEFINER so the internal lookup bypasses RLS on group_members
+-- (otherwise the delete policy below would recurse into group_members).
+create or replace function public.is_group_owner(gid uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.group_members
+    where group_id = gid and user_id = auth.uid() and role = 'owner'
+  );
+$$;
+
+drop policy if exists "owners can remove members" on public.group_members;
+create policy "owners can remove members"
+  on public.group_members for delete
+  to authenticated using (public.is_group_owner(group_id));
+
 -- Auto-add the creator as an owner member.
 create or replace function public.handle_new_group()
 returns trigger
