@@ -307,3 +307,175 @@ drop policy if exists "users delete their own logs" on public.activity_logs;
 create policy "users delete their own logs"
   on public.activity_logs for delete
   to authenticated using (auth.uid() = user_id);
+
+-- ============================================================
+-- 5. CHALLENGES — scoped to a group, created by the owner.
+-- A challenge measures a metric over a date window. When the
+-- deadline passes and someone views the group, finalize_challenge()
+-- picks a winner and awards points.
+-- ============================================================
+alter table public.group_members
+  add column if not exists group_points integer not null default 0;
+
+create table if not exists public.challenges (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  created_by uuid not null references public.profiles(id) on delete cascade,
+  name text not null,
+  description text,
+  -- activity_id is null for "active_days" challenges (any check-in counts).
+  activity_id text,
+  metric_type text not null check (metric_type in (
+    'count_days', 'sum_duration_min', 'sum_detail', 'sum_points', 'active_days'
+  )),
+  -- detail_key is required when metric_type = 'sum_detail'. Points at a key
+  -- inside activity_logs.details (e.g. 'distance_km', 'pages').
+  detail_key text,
+  unit text,
+  starts_at date not null,
+  ends_at date not null check (ends_at >= starts_at),
+  reward_points integer not null default 0,
+  finalized_at timestamptz,
+  winner_id uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists challenges_group_idx
+  on public.challenges (group_id, ends_at);
+create index if not exists challenges_open_idx
+  on public.challenges (ends_at) where finalized_at is null;
+
+alter table public.challenges enable row level security;
+
+drop policy if exists "members read group challenges" on public.challenges;
+create policy "members read group challenges"
+  on public.challenges for select
+  to authenticated using (
+    group_id in (select public.user_group_ids())
+  );
+
+drop policy if exists "owners create challenges" on public.challenges;
+create policy "owners create challenges"
+  on public.challenges for insert
+  to authenticated with check (
+    public.is_group_owner(group_id) and auth.uid() = created_by
+  );
+
+drop policy if exists "owners update challenges" on public.challenges;
+create policy "owners update challenges"
+  on public.challenges for update
+  to authenticated
+  using (public.is_group_owner(group_id))
+  with check (public.is_group_owner(group_id));
+
+drop policy if exists "owners delete challenges" on public.challenges;
+create policy "owners delete challenges"
+  on public.challenges for delete
+  to authenticated using (public.is_group_owner(group_id));
+
+-- finalize_challenge(cid): if the challenge is past its deadline and not
+-- yet finalized, pick a winner from the group's member metric scores and
+-- award reward_points to both profiles.total_points (journey) and
+-- group_members.group_points (group ranking). Idempotent — safe to call
+-- repeatedly; no-ops if already finalized or not yet due.
+--
+-- SECURITY DEFINER so the internal lookups bypass RLS and so no caller can
+-- inject a fake winner (the winner is computed entirely in SQL).
+create or replace function public.finalize_challenge(cid uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  c public.challenges;
+  w uuid;
+begin
+  select * into c from public.challenges
+  where id = cid and finalized_at is null and ends_at < current_date
+  for update;
+
+  if not found then return; end if;
+
+  with logs as (
+    select al.user_id, ci.local_date, al.points, al.duration_min, al.details
+    from public.activity_logs al
+    join public.check_ins ci on ci.id = al.check_in_id
+    where ci.local_date >= c.starts_at
+      and ci.local_date <= c.ends_at
+      and al.user_id in (
+        select user_id from public.group_members where group_id = c.group_id
+      )
+      and (c.activity_id is null or al.activity_id = c.activity_id)
+  ),
+  scored as (
+    select user_id,
+      count(distinct local_date) as days,
+      coalesce(sum(duration_min), 0) as total_duration,
+      coalesce(sum(points), 0) as total_points,
+      coalesce(sum(
+        case
+          when c.detail_key is not null
+               and (details ->> c.detail_key) ~ '^-?[0-9]+(\.[0-9]+)?$'
+            then (details ->> c.detail_key)::numeric
+          else 0
+        end
+      ), 0) as detail_sum
+    from logs
+    group by user_id
+  ),
+  ranked as (
+    select user_id,
+      case c.metric_type
+        when 'count_days'        then days::numeric
+        when 'sum_duration_min'  then total_duration::numeric
+        when 'sum_detail'        then detail_sum
+        when 'sum_points'        then total_points::numeric
+        when 'active_days'       then days::numeric
+        else 0::numeric
+      end as metric
+    from scored
+  )
+  select user_id into w
+  from ranked
+  where metric > 0
+  order by metric desc, user_id asc
+  limit 1;
+
+  update public.challenges
+  set finalized_at = now(), winner_id = w
+  where id = cid;
+
+  if w is not null and c.reward_points > 0 then
+    update public.profiles
+    set total_points = total_points + c.reward_points
+    where id = w;
+
+    update public.group_members
+    set group_points = group_points + c.reward_points
+    where group_id = c.group_id and user_id = w;
+  end if;
+end;
+$$;
+
+-- Finalize every expired challenge in a group. Called when a group or
+-- challenge page is viewed so awards are applied on first look past deadline.
+create or replace function public.finalize_group_challenges(gid uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r record;
+begin
+  for r in
+    select id from public.challenges
+    where group_id = gid
+      and finalized_at is null
+      and ends_at < current_date
+  loop
+    perform public.finalize_challenge(r.id);
+  end loop;
+end;
+$$;
