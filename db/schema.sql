@@ -23,10 +23,35 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+-- SECURITY DEFINER helper to get the current user's group ids without
+-- triggering RLS on group_members (which would recurse).
+create or replace function public.user_group_ids()
+returns setof uuid
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select group_id from public.group_members where user_id = auth.uid();
+$$;
+
+-- Users can always read their own profile.
 drop policy if exists "profiles are readable by authenticated users" on public.profiles;
-create policy "profiles are readable by authenticated users"
+drop policy if exists "users can read their own profile" on public.profiles;
+create policy "users can read their own profile"
   on public.profiles for select
-  to authenticated using (true);
+  to authenticated using (auth.uid() = id);
+
+-- Group members can read each other's profiles (for leaderboards).
+drop policy if exists "users can read group members' profiles" on public.profiles;
+create policy "users can read group members' profiles"
+  on public.profiles for select
+  to authenticated using (
+    id in (
+      select user_id from public.group_members
+      where group_id in (select public.user_group_ids())
+    )
+  );
 
 drop policy if exists "users can insert their own profile" on public.profiles;
 create policy "users can insert their own profile"
@@ -93,10 +118,7 @@ drop policy if exists "members can read their groups" on public.groups;
 create policy "members can read their groups"
   on public.groups for select
   to authenticated using (
-    exists (
-      select 1 from public.group_members
-      where group_id = public.groups.id and user_id = auth.uid()
-    )
+    id in (select public.user_group_ids())
   );
 
 -- Allow reading group metadata by invite_code — needed for the join-preview page.
@@ -134,10 +156,7 @@ drop policy if exists "members read their group's members" on public.group_membe
 create policy "members read their group's members"
   on public.group_members for select
   to authenticated using (
-    exists (
-      select 1 from public.group_members gm
-      where gm.group_id = public.group_members.group_id and gm.user_id = auth.uid()
-    )
+    group_id in (select public.user_group_ids())
   );
 
 drop policy if exists "users can join groups (as self)" on public.group_members;
@@ -196,11 +215,9 @@ drop policy if exists "users read group members' check-ins" on public.check_ins;
 create policy "users read group members' check-ins"
   on public.check_ins for select
   to authenticated using (
-    exists (
-      select 1
-      from public.group_members gm_self
-      join public.group_members gm_other on gm_self.group_id = gm_other.group_id
-      where gm_self.user_id = auth.uid() and gm_other.user_id = public.check_ins.user_id
+    user_id in (
+      select user_id from public.group_members
+      where group_id in (select public.user_group_ids())
     )
   );
 
@@ -249,11 +266,9 @@ drop policy if exists "users read group members' logs" on public.activity_logs;
 create policy "users read group members' logs"
   on public.activity_logs for select
   to authenticated using (
-    exists (
-      select 1
-      from public.group_members gm_self
-      join public.group_members gm_other on gm_self.group_id = gm_other.group_id
-      where gm_self.user_id = auth.uid() and gm_other.user_id = public.activity_logs.user_id
+    user_id in (
+      select user_id from public.group_members
+      where group_id in (select public.user_group_ids())
     )
   );
 

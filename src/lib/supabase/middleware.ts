@@ -4,6 +4,13 @@ import { NextResponse, type NextRequest } from "next/server";
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
+  const { pathname } = request.nextUrl;
+  const isServerAction = request.method === "POST" && request.headers.has("next-action");
+
+  // Skip token refresh for Server Action POSTs — the action's own Supabase
+  // client will refresh as needed, and refreshing here races with that path.
+  if (isServerAction) return supabaseResponse;
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -26,12 +33,11 @@ export async function updateSession(request: NextRequest) {
   );
 
   // Refresh the session — required for Server Components.
-  // Don't remove or move this `getUser()` call.
+  // This is the ONLY place that should call getUser() for non-action requests,
+  // to avoid token-rotation races with downstream SSR renders.
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const { pathname } = request.nextUrl;
 
   const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/signup");
   const isProtectedRoute =

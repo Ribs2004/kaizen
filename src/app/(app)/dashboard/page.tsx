@@ -7,14 +7,10 @@ export const metadata = { title: "Today" };
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("display_name, username, total_points, current_streak, longest_streak, last_checkin_date")
-    .eq("id", user!.id)
     .maybeSingle();
 
   const totalPoints = profile?.total_points ?? 0;

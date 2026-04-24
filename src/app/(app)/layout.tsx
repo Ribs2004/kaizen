@@ -1,21 +1,18 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { logoutAction } from "@/app/auth/actions";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
+  // Auth is enforced by the proxy (src/proxy.ts) for /dashboard, /check-in, etc.
+  // We intentionally don't call supabase.auth.getUser() here — it can trigger a
+  // silent token rotation during SSR render, which can't set cookies and ends
+  // up invalidating the session on the next POST.
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/login");
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("display_name, username, avatar_emoji, total_points, current_streak")
-    .eq("id", user.id)
     .maybeSingle();
 
   const displayName = profile?.display_name ?? profile?.username ?? "Athlete";

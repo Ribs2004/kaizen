@@ -10,14 +10,10 @@ export default async function CheckInPage({
 }) {
   const { error, date } = await searchParams;
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
   const { data: profile } = await supabase
     .from("profiles")
     .select("current_streak, last_checkin_date")
-    .eq("id", user!.id)
     .maybeSingle();
 
   // Load today's existing check-in + logs to prefill the form.
@@ -32,7 +28,6 @@ export default async function CheckInPage({
   const { data: existing } = await supabase
     .from("check_ins")
     .select("id, note")
-    .eq("user_id", user!.id)
     .eq("local_date", editingDate)
     .maybeSingle();
 

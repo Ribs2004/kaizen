@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { ACTIVITIES, CATEGORY_LABELS, type Activity, type ActivityCategory } from "@/lib/activities";
 import { basePointsForLog, streakTierFor } from "@/lib/scoring";
-import { submitCheckIn } from "./actions";
+import { submitCheckIn, type CheckInState } from "./actions";
+
+const initialCheckInState: CheckInState = { error: null };
 
 type ExistingLog = {
   activity_id: string;
@@ -56,8 +58,9 @@ export function CheckInForm({
   existingLogs: ExistingLog[];
   serverError?: string;
 }) {
-  const [state, setState] = useState(() => initialState(existingLogs));
+  const [tiles, setTiles] = useState(() => initialState(existingLogs));
   const [note, setNote] = useState(existingNote);
+  const [actionState, formAction] = useActionState(submitCheckIn, initialCheckInState);
 
   // Streak that today's check-in will produce.
   const projectedStreak = isEditingToday ? currentStreak : currentStreak + 1;
@@ -67,7 +70,7 @@ export function CheckInForm({
     let base = 0;
     let count = 0;
     for (const activity of ACTIVITIES) {
-      const s = state[activity.id];
+      const s = tiles[activity.id];
       if (!s?.selected) continue;
       count++;
       const durationMin = s.durationMin ? Number(s.durationMin) : null;
@@ -77,7 +80,7 @@ export function CheckInForm({
       });
     }
     return { selectedCount: count, basePoints: base, totalPoints: Math.round(base * tier.multiplier) };
-  }, [state, tier.multiplier]);
+  }, [tiles, tier.multiplier]);
 
   const byCategory = useMemo(() => {
     const groups: Record<ActivityCategory, Activity[]> = {
@@ -92,35 +95,35 @@ export function CheckInForm({
   }, []);
 
   function toggle(activityId: string) {
-    setState((prev) => {
+    setTiles((prev) => {
       const cur = prev[activityId];
       return { ...prev, [activityId]: { ...cur, selected: !cur.selected } };
     });
   }
 
   function toggleExpanded(activityId: string) {
-    setState((prev) => {
+    setTiles((prev) => {
       const cur = prev[activityId];
       return { ...prev, [activityId]: { ...cur, expanded: !cur.expanded } };
     });
   }
 
   function updateDetail(activityId: string, key: string, value: string) {
-    setState((prev) => {
+    setTiles((prev) => {
       const cur = prev[activityId];
       return { ...prev, [activityId]: { ...cur, details: { ...cur.details, [key]: value } } };
     });
   }
 
   function updateDuration(activityId: string, value: string) {
-    setState((prev) => {
+    setTiles((prev) => {
       const cur = prev[activityId];
       return { ...prev, [activityId]: { ...cur, durationMin: value } };
     });
   }
 
   return (
-    <form action={submitCheckIn} className="fade-up flex flex-col gap-5 pb-4">
+    <form action={formAction} className="fade-up flex flex-col gap-5 pb-4">
       <input type="hidden" name="local_date" value={localDate} />
 
       <header className="flex items-start justify-between gap-4">
@@ -137,9 +140,12 @@ export function CheckInForm({
         </div>
       </header>
 
-      {serverError && (
-        <div className="rounded-lg border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]">
-          {serverError}
+      {(actionState.error || serverError) && (
+        <div
+          aria-live="polite"
+          className="rounded-lg border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-sm text-[var(--danger)]"
+        >
+          {actionState.error ?? serverError}
         </div>
       )}
 
@@ -170,7 +176,7 @@ export function CheckInForm({
             </h2>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {activities.map((activity) => {
-                const s = state[activity.id];
+                const s = tiles[activity.id];
                 return (
                   <ActivityTile
                     key={activity.id}
